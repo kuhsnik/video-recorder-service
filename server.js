@@ -1,5 +1,6 @@
 const express = require('express');
 const { spawn } = require('child_process');
+const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 
@@ -12,7 +13,6 @@ let isRecording = false;
 let activeProcesses = [];
 
 const RECORDINGS_DIR = '/usr/src/app/recordings';
-const USER_DATA_DIR = '/usr/src/app/chrome-data';
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -65,25 +65,34 @@ function startXvfb() {
   });
 }
 
-function startChrome(videoId) {
-  return new Promise((resolve, reject) => {
-    const previewUrl = `https://app.deckoholic.ai/preview-headless/${videoId}?autoplay=true`;
-    log(`Starting Chrome with URL: ${previewUrl}`);
+async function startChromeAndValidateVideo(videoId) {
+  const previewUrl = `https://app.deckoholic.ai/preview-headless/${videoId}?autoplay=true`;
+  log(`Starting Chrome with URL: ${previewUrl}`);
 
-    const chromeArgs = [
+  const browser = await puppeteer.launch({
+    headless: false,
+    executablePath: '/usr/bin/google-chrome',
+    args: [
       '--display=:99',
       '--no-sandbox',
+      '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-gpu-sandbox',
+      '--use-gl=swiftshader',
+      '--enable-unsafe-swiftshader',
+      '--ignore-gpu-blacklist',
+      '--enable-webgl',
+      '--enable-accelerated-2d-canvas',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--user-data-dir=/usr/src/app/chrome-data',
+      '--window-size=1920,1080',
       '--start-fullscreen',
       '--kiosk',
       '--autoplay-policy=no-user-gesture-required',
       '--disable-web-security',
       '--disable-features=VizDisplayCompositor',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-gpu',
-      '--disable-software-rasterizer',
       '--disable-background-networking',
       '--disable-default-apps',
       '--disable-extensions',
@@ -92,36 +101,75 @@ function startChrome(videoId) {
       '--hide-scrollbars',
       '--mute-audio',
       '--no-first-run',
-      '--no-default-browser-check',
-      `--user-data-dir=${USER_DATA_DIR}`,
-      previewUrl
-    ];
-
-    const chrome = spawn('google-chrome', chromeArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, DISPLAY: ':99' }
-    });
-
-    activeProcesses.push({ process: chrome, name: 'Chrome' });
-
-    chrome.on('error', (error) => {
-      log(`Chrome error: ${error.message}`);
-      reject(error);
-    });
-
-    chrome.stderr.on('data', (data) => {
-      log(`Chrome stderr: ${data.toString()}`);
-    });
-
-    setTimeout(() => {
-      if (!chrome.killed) {
-        log('Chrome started successfully, waiting for page load');
-        setTimeout(() => resolve(chrome), 10000);
-      } else {
-        reject(new Error('Chrome failed to start'));
-      }
-    }, 2000);
+      '--no-default-browser-check'
+    ],
+    env: { DISPLAY: ':99' }
   });
+
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1920, height: 1080 });
+  
+  log('Navigating to preview URL...');
+  await page.goto(previewUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+
+  log('Waiting for video to start playing with effects...');
+  
+  let videoReady = false;
+  let attempts = 0;
+  const maxAttempts = 60; // 60 seconds max
+
+  while (!videoReady && attempts < maxAttempts) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    try {
+      const status = await page.evaluate(() => {
+        const video = document.querySelector('video');
+        const canvas = document.querySelector('canvas');
+        return {
+          ready: window.PREVIEW_READY || false,
+          playing: window.PREVIEW_PLAYING || false,
+          videoExists: !!video,
+          videoPlaying: video ? !video.paused : false,
+          currentTime: video ? video.currentTime : 0,
+          hasWebGL: !!canvas,
+          pageLoaded: document.readyState === 'complete',
+          videoSrc: video ? video.src : null,
+          videoDuration: video ? video.duration : 0
+        };
+      });
+
+      log(`Check ${attempts + 1}/60:`, status);
+
+      // Video must be playing AND have WebGL canvas AND show progress
+      if (status.ready && status.playing && status.videoPlaying &&
+          status.currentTime > 2 && status.hasWebGL && status.pageLoaded) {
+        videoReady = true;
+        log('✅ Video confirmed playing with effects!');
+        break;
+      }
+
+      // Extra wait for WebGL to initialize
+      if (status.hasWebGL && !videoReady && attempts > 10) {
+        log('WebGL detected, waiting for video effects...');
+      }
+
+    } catch (err) {
+      log(`Evaluation error attempt ${attempts + 1}:`, err.message);
+    }
+
+    attempts++;
+  }
+
+  if (!videoReady) {
+    await browser.close();
+    throw new Error('Video with effects failed to start within 60 seconds');
+  }
+
+  // Wait additional 3 seconds for effects to fully initialize
+  log('Waiting 3 more seconds for effects to stabilize...');
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  return { browser, page };
 }
 
 function recordVideo(duration, outputPath) {
@@ -156,7 +204,11 @@ function recordVideo(duration, outputPath) {
     });
 
     ffmpeg.stderr.on('data', (data) => {
-      log(`FFmpeg stderr: ${data.toString()}`);
+      const output = data.toString();
+      // Log important info but filter noise
+      if (output.includes('frame=') || output.includes('size=') || output.includes('time=')) {
+        log(`FFmpeg: ${output.trim()}`);
+      }
     });
 
     ffmpeg.on('close', (code) => {
@@ -192,14 +244,25 @@ app.post('/record-video', async (req, res) => {
 
   isRecording = true;
   const outputPath = `${RECORDINGS_DIR}/recording_${videoId}_${Date.now()}.mp4`;
+  let browser = null;
   
   try {
     log(`Starting recording process for videoId: ${videoId}, duration: ${duration}s`);
 
+    // Start Xvfb
     await startXvfb();
-    await startChrome(videoId);
+    
+    // Start Chrome and validate video is playing with effects
+    const { browser: chromeBrowser, page } = await startChromeAndValidateVideo(videoId);
+    browser = chromeBrowser;
+    
+    // Now start recording the validated video
     await recordVideo(duration, outputPath);
 
+    // Close browser
+    await browser.close();
+    
+    // Cleanup processes
     await cleanup();
     activeProcesses = [];
 
@@ -216,6 +279,7 @@ app.post('/record-video', async (req, res) => {
         outputPath: outputPath
       });
 
+      // Clean up file after 60 seconds
       setTimeout(() => {
         if (fs.existsSync(outputPath)) {
           fs.unlinkSync(outputPath);
@@ -228,6 +292,14 @@ app.post('/record-video', async (req, res) => {
 
   } catch (error) {
     log(`Recording failed: ${error.message}`);
+    
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (e) {
+        log(`Error closing browser: ${e.message}`);
+      }
+    }
     
     await cleanup();
     activeProcesses = [];
