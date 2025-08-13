@@ -31,16 +31,13 @@ COPY . .
 
 # Create necessary directories with proper permissions
 RUN mkdir -p /usr/src/app/recordings /usr/src/app/chrome-data \
-    && chown -R chrome:chrome /usr/src/app/recordings /usr/src/app/chrome-data
+    && chmod 755 /usr/src/app/recordings /usr/src/app/chrome-data
 
 # Set up PulseAudio for audio capture
 RUN echo "load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-socket" > /etc/pulse/system.pa
 
-# Create a non-root user for Chrome
-RUN groupadd -r chrome && useradd -r -g chrome -G audio chrome \
-    && mkdir -p /home/chrome/Downloads /app \
-    && chown -R chrome:chrome /home/chrome \
-    && chown -R chrome:chrome /usr/src/app
+# Create directories for Chrome
+RUN mkdir -p /tmp/chrome-data
 
 # Set environment variables
 ENV DISPLAY=:99
@@ -50,8 +47,7 @@ ENV NODE_ENV=production
 # Expose port
 EXPOSE 3000
 
-# Switch to chrome user
-USER chrome
+# Run as root (default for Render containers)
 
 # Start the application
 CMD ["node", "server.js"]
