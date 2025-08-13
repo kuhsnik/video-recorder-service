@@ -29,8 +29,9 @@ RUN npm install --only=production
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p /tmp
+# Create necessary directories with proper permissions
+RUN mkdir -p /usr/src/app/recordings /usr/src/app/chrome-data \
+    && chown -R chrome:chrome /usr/src/app/recordings /usr/src/app/chrome-data
 
 # Set up PulseAudio for audio capture
 RUN echo "load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-socket" > /etc/pulse/system.pa

@@ -11,6 +11,9 @@ app.use(express.json());
 let isRecording = false;
 let activeProcesses = [];
 
+const RECORDINGS_DIR = '/usr/src/app/recordings';
+const USER_DATA_DIR = '/usr/src/app/chrome-data';
+
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
 }
@@ -74,13 +77,23 @@ function startChrome(videoId) {
       '--start-fullscreen',
       '--kiosk',
       '--autoplay-policy=no-user-gesture-required',
-      '--enable-gpu',
-      '--use-gl=desktop',
       '--disable-web-security',
       '--disable-features=VizDisplayCompositor',
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
+      '--disable-gpu',
+      '--disable-software-rasterizer',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-extensions',
+      '--disable-sync',
+      '--disable-translate',
+      '--hide-scrollbars',
+      '--mute-audio',
+      '--no-first-run',
+      '--no-default-browser-check',
+      `--user-data-dir=${USER_DATA_DIR}`,
       previewUrl
     ];
 
@@ -116,17 +129,16 @@ function recordVideo(duration, outputPath) {
     log(`Starting FFmpeg recording for ${duration} seconds`);
 
     const ffmpegArgs = [
+      '-nostdin',
       '-f', 'x11grab',
       '-video_size', '1920x1080',
       '-framerate', '30',
       '-i', ':99.0',
-      '-f', 'pulse',
-      '-i', 'default',
+      '-an',
       '-c:v', 'libx264',
-      '-preset', 'medium',
-      '-crf', '23',
-      '-c:a', 'aac',
-      '-b:a', '192k',
+      '-preset', 'ultrafast',
+      '-crf', '28',
+      '-pix_fmt', 'yuv420p',
       '-t', duration.toString(),
       '-y',
       outputPath
@@ -179,7 +191,7 @@ app.post('/record-video', async (req, res) => {
   }
 
   isRecording = true;
-  const outputPath = `/tmp/recording_${videoId}_${Date.now()}.mp4`;
+  const outputPath = `${RECORDINGS_DIR}/recording_${videoId}_${Date.now()}.mp4`;
   
   try {
     log(`Starting recording process for videoId: ${videoId}, duration: ${duration}s`);
