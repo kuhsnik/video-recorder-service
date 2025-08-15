@@ -236,32 +236,36 @@ async function uploadToSupabase(filePath, videoId) {
     const fileName = `recorded_${Date.now()}.mp4`;
     const storagePath = `${videoId}/processed/${fileName}`;
     
-    // Upload to Supabase storage
-    const { data, error } = await supabase.storage
+    // Upload to Supabase storage (private bucket)
+    const { data: uploadData, error: uploadError } = await supabase.storage
       .from('videos')
       .upload(storagePath, fileBuffer, {
         contentType: 'video/mp4',
-        upsert: false
+        cacheControl: '3600'
       });
 
-    if (error) {
-      throw new Error(`Storage upload failed: ${error.message}`);
+    if (uploadError) {
+      throw new Error(`Storage upload failed: ${uploadError.message}`);
     }
 
     log(`File uploaded to storage: ${storagePath}`);
 
-    // Get public URL
-    const { data: publicUrlData } = supabase.storage
+    // Create signed URL for private bucket (1 hour expiry)
+    const { data: urlData, error: urlError } = await supabase.storage
       .from('videos')
-      .getPublicUrl(storagePath);
+      .createSignedUrl(storagePath, 3600);
 
-    const publicUrl = publicUrlData.publicUrl;
-    log(`Public URL generated: ${publicUrl}`);
+    if (urlError) {
+      throw new Error(`Signed URL creation failed: ${urlError.message}`);
+    }
+
+    const downloadUrl = urlData.signedUrl;
+    log(`Signed URL generated: ${downloadUrl}`);
 
     // Update database record
     const { error: dbError } = await supabase
       .from('videos')
-      .update({ processed_video_path: publicUrl })
+      .update({ processed_video_path: downloadUrl })
       .eq('id', videoId);
 
     if (dbError) {
@@ -271,7 +275,7 @@ async function uploadToSupabase(filePath, videoId) {
       log(`Database updated for video ID: ${videoId}`);
     }
 
-    return publicUrl;
+    return downloadUrl;
 
   } catch (error) {
     log(`Supabase upload error: ${error.message}`);
