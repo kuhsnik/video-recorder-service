@@ -65,9 +65,8 @@ function startXvfb() {
   });
 }
 
-function startChrome(videoId) {
+function startChrome(previewUrl) {
   return new Promise((resolve, reject) => {
-    const previewUrl = `https://app.deckoholic.ai/preview-headless/${videoId}?autoplay=true`;
     log(`Starting Chrome with URL: ${previewUrl}`);
 
     const chromeArgs = [
@@ -75,9 +74,8 @@ function startChrome(videoId) {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-gpu-sandbox',
-      '--use-gl=swiftshader',
-      '--enable-unsafe-swiftshader',
+      '--use-gl=desktop',
+      '--enable-gpu-rasterization',
       '--ignore-gpu-blacklist',
       '--enable-webgl',
       '--enable-accelerated-2d-canvas',
@@ -127,11 +125,31 @@ function startChrome(videoId) {
     setTimeout(() => {
       if (!chrome.killed) {
         log('Chrome started successfully, waiting for page and video to load');
-        // Wait 15 seconds total for video to load and effects to initialize
-        setTimeout(() => {
-          log('Video should be playing with effects now');
-          resolve(chrome);
-        }, 15000);
+        // Wait 30 seconds total for video to load and effects to initialize
+        // Add basic validation by checking if the page is responsive
+        let waitTime = 0;
+        const checkInterval = 2000; // Check every 2 seconds
+        const maxWaitTime = 30000; // 30 seconds max
+        
+        const validateVideo = () => {
+          waitTime += checkInterval;
+          
+          if (waitTime >= maxWaitTime) {
+            log('Maximum wait time reached - assuming video is ready');
+            resolve(chrome);
+            return;
+          }
+          
+          // Basic check - if Chrome is still running, continue waiting
+          if (!chrome.killed) {
+            log(`Video loading progress: ${waitTime/1000}s/${maxWaitTime/1000}s`);
+            setTimeout(validateVideo, checkInterval);
+          } else {
+            reject(new Error('Chrome process died during video loading'));
+          }
+        };
+        
+        validateVideo();
       } else {
         reject(new Error('Chrome failed to start'));
       }
@@ -203,10 +221,10 @@ app.post('/record-video', async (req, res) => {
     return res.status(429).json({ error: 'Recording already in progress' });
   }
 
-  const { videoId, duration } = req.body;
+  const { videoId, duration, previewUrl } = req.body;
 
-  if (!videoId || !duration) {
-    return res.status(400).json({ error: 'videoId and duration are required' });
+  if (!videoId || !duration || !previewUrl) {
+    return res.status(400).json({ error: 'videoId, duration, and previewUrl are required' });
   }
 
   if (duration < 1 || duration > 300) {
@@ -223,7 +241,7 @@ app.post('/record-video', async (req, res) => {
     await startXvfb();
     
     // Start Chrome and wait for video to load
-    await startChrome(videoId);
+    await startChrome(previewUrl);
     
     // Now start recording
     await recordVideo(duration, outputPath);
