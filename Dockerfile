@@ -43,8 +43,6 @@ RUN mkdir -p /tmp/chrome-data
 ENV DISPLAY=:99
 ENV PULSE_RUNTIME_PATH=/tmp
 ENV NODE_ENV=production
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 
 # Expose port
 EXPOSE 3000
