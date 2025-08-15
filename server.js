@@ -2,6 +2,7 @@ const express = require('express');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,6 +14,16 @@ let activeProcesses = [];
 
 const RECORDINGS_DIR = '/usr/src/app/recordings';
 const USER_DATA_DIR = '/usr/src/app/chrome-data';
+
+// Initialize Supabase client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://zpigvdncoauybrssdibo.supabase.co';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseServiceKey) {
+  log('WARNING: SUPABASE_SERVICE_ROLE_KEY not found in environment variables');
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -216,6 +227,58 @@ function recordVideo(duration, outputPath) {
   });
 }
 
+async function uploadToSupabase(filePath, videoId) {
+  try {
+    log('Starting upload to Supabase storage...');
+    
+    // Read the file
+    const fileBuffer = fs.readFileSync(filePath);
+    const fileName = `recorded_${Date.now()}.mp4`;
+    const storagePath = `${videoId}/processed/${fileName}`;
+    
+    // Upload to Supabase storage
+    const { data, error } = await supabase.storage
+      .from('videos')
+      .upload(storagePath, fileBuffer, {
+        contentType: 'video/mp4',
+        upsert: false
+      });
+
+    if (error) {
+      throw new Error(`Storage upload failed: ${error.message}`);
+    }
+
+    log(`File uploaded to storage: ${storagePath}`);
+
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('videos')
+      .getPublicUrl(storagePath);
+
+    const publicUrl = publicUrlData.publicUrl;
+    log(`Public URL generated: ${publicUrl}`);
+
+    // Update database record
+    const { error: dbError } = await supabase
+      .from('videos')
+      .update({ processed_video_path: publicUrl })
+      .eq('id', videoId);
+
+    if (dbError) {
+      log(`Database update failed: ${dbError.message}`);
+      // Continue anyway, file was uploaded successfully
+    } else {
+      log(`Database updated for video ID: ${videoId}`);
+    }
+
+    return publicUrl;
+
+  } catch (error) {
+    log(`Supabase upload error: ${error.message}`);
+    throw error;
+  }
+}
+
 app.post('/record-video', async (req, res) => {
   if (isRecording) {
     return res.status(429).json({ error: 'Recording already in progress' });
@@ -254,22 +317,40 @@ app.post('/record-video', async (req, res) => {
       const stats = fs.statSync(outputPath);
       log(`Recording completed successfully. File size: ${stats.size} bytes`);
       
+      let publicUrl = null;
+      let uploadError = null;
+
+      // Try to upload to Supabase
+      try {
+        publicUrl = await uploadToSupabase(outputPath, videoId);
+        log(`Upload completed successfully. Public URL: ${publicUrl}`);
+        
+        // Clean up local file immediately after successful upload
+        fs.unlinkSync(outputPath);
+        log(`Local file cleaned up after upload: ${outputPath}`);
+      } catch (error) {
+        uploadError = error.message;
+        log(`Upload failed: ${uploadError}`);
+        
+        // Clean up local file after 60 seconds as fallback
+        setTimeout(() => {
+          if (fs.existsSync(outputPath)) {
+            fs.unlinkSync(outputPath);
+            log(`Cleaned up temporary file after upload failure: ${outputPath}`);
+          }
+        }, 60000);
+      }
+
       res.json({
         success: true,
         message: 'Video recorded successfully',
         videoId,
         duration,
         fileSize: stats.size,
-        outputPath: outputPath
+        url: publicUrl,
+        outputPath: publicUrl || outputPath,
+        uploadError: uploadError
       });
-
-      // Clean up file after 60 seconds
-      setTimeout(() => {
-        if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath);
-          log(`Cleaned up temporary file: ${outputPath}`);
-        }
-      }, 60000);
     } else {
       throw new Error('Recording file was not created');
     }
