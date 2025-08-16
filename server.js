@@ -136,11 +136,11 @@ function startChrome(previewUrl) {
     setTimeout(() => {
       if (!chrome.killed) {
         log('Chrome started successfully, waiting for page and video to load');
-        // Wait 30 seconds total for video to load and effects to initialize
+        // Wait 5 seconds total for video to load and effects to initialize
         // Add basic validation by checking if the page is responsive
         let waitTime = 0;
-        const checkInterval = 2000; // Check every 2 seconds
-        const maxWaitTime = 30000; // 30 seconds max
+        const checkInterval = 1000; // Check every 1 second
+        const maxWaitTime = 5000; // 5 seconds max
         
         const validateVideo = () => {
           waitTime += checkInterval;
