@@ -186,7 +186,7 @@ function recordVideo(duration, outputPath) {
       '-nostdin',
       '-f', 'x11grab',
       '-video_size', '1920x1080',
-      '-framerate', '60',
+      '-framerate', '120',
       '-probesize', '10M',
       '-thread_queue_size', '512',
       '-i', ':99.0',
@@ -198,6 +198,8 @@ function recordVideo(duration, outputPath) {
       '-g', '120',
       '-bf', '2',
       '-r', '60',
+      '-async', '1',
+      '-vsync', '0',
       '-t', duration.toString(),
       '-y',
       outputPath
