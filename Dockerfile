@@ -45,7 +45,7 @@ ENV PULSE_RUNTIME_PATH=/tmp
 ENV NODE_ENV=production
 
 # Expose port
-EXPOSE 3000
+EXPOSE 8080
 
 # Run as root (default for Render containers)
 
