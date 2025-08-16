@@ -136,11 +136,11 @@ function startChrome(previewUrl) {
     setTimeout(() => {
       if (!chrome.killed) {
         log('Chrome started successfully, waiting for page and video to load');
-        // Wait 30 seconds total for video to load and effects to initialize
+        // Wait 5 seconds total for video to load and effects to initialize
         // Add basic validation by checking if the page is responsive
         let waitTime = 0;
-        const checkInterval = 2000; // Check every 2 seconds
-        const maxWaitTime = 30000; // 30 seconds max
+        const checkInterval = 1000; // Check every 1 second
+        const maxWaitTime = 5000; // 5 seconds max
         
         const validateVideo = () => {
           waitTime += checkInterval;
@@ -180,9 +180,12 @@ function recordVideo(duration, outputPath) {
       '-i', ':99.0',
       '-an',
       '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '28',
+      '-preset', 'medium',
+      '-crf', '18',
       '-pix_fmt', 'yuv420p',
+      '-r', '30',
+      '-vsync', 'cfr',
+      '-force_key_frames', 'expr:gte(t,n_forced*1)',
       '-t', duration.toString(),
       '-y',
       outputPath
